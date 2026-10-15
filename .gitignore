@@ -1,0 +1,15 @@
+# environment and caches
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# large data files (link Zenodo in the README instead)
+*.tar
+*.parquet
+*.npz
+data/
+
+# personal/proposal documents (decide later)
+*.docx
+*.pptx

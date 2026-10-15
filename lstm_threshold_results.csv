@@ -1,0 +1,4 @@
+threshold,value,precision,recall,F1,false_pos,false_neg,true_pos
+95th percentile,0.0085,0.034,0.594,0.064,12925,309,452
+99th percentile,0.1321,0.062,0.329,0.105,3752,511,250
+mean + 3 std,0.1656,0.08,0.323,0.128,2822,515,246

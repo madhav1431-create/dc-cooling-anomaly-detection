@@ -1,0 +1,7 @@
+model,threshold,episodes,detected,event_recall,alarm_bursts,false_bursts,burst_precision
+LSTM-AE,95th pct,31,23,0.742,619,593,0.042
+LSTM-AE,99th pct,31,14,0.452,483,468,0.031
+LSTM-AE,mean+3std,31,13,0.419,382,368,0.037
+IsoForest,95th pct,31,18,0.581,697,682,0.022
+IsoForest,99th pct,31,13,0.419,735,722,0.018
+IsoForest,mean+3std,31,13,0.419,689,676,0.019
