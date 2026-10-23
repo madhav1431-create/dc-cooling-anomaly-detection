@@ -18,6 +18,14 @@ alt.data_transformers.disable_max_rows()
 st.set_page_config(page_title="Cooling anomaly replay", layout="wide")
 
 
+def div(a, b):
+    return a / b if b else 0.0
+
+
+def pct(x, nd=1):
+    return f"{x * 100:.{nd}f}%"
+
+
 @st.cache_data
 def load():
     d = pd.read_parquet(DATA)
@@ -51,12 +59,21 @@ def metrics(sub, thr):
         bursts += int(br.max())
         false_bursts += int(br.max()) - len(np.unique(br[(br > 0) & y]))
     total = tp + fp + fn + tn
-    div = lambda a, b: a / b if b else 0.0
     prec, rec = div(tp, tp + fp), div(tp, tp + fn)
     return dict(tp=tp, fp=fp, fn=fn, tn=tn, total=total,
                 accuracy=div(tp + tn, total), baseline=div(tn + fp, total),
                 precision=prec, recall=rec, f1=div(2 * prec * rec, prec + rec),
+                fpr=div(fp, fp + tn), miss=div(fn, fn + tp), tnr=div(tn, tn + fp),
                 episodes=episodes, caught=caught, bursts=bursts, false_bursts=false_bursts)
+
+
+def pct_table(df):
+    t = df.copy()
+    for col in ["accuracy", "precision", "recall", "always_normal_acc"]:
+        if col in t:
+            t[col] = (t[col] * 100).round(2)
+    return t.rename(columns={"accuracy": "accuracy (%)", "precision": "precision (%)",
+                             "recall": "recall (%)", "always_normal_acc": "always-normal acc (%)"})
 
 
 data = load()
@@ -139,22 +156,51 @@ with tab2:
              f"Windows with a known label: **{m['total']:,}**.")
 
     a, b, c, e = st.columns(4)
-    a.metric("Accuracy", f"{m['accuracy']:.2%}",
+    a.metric("Accuracy", pct(m["accuracy"], 2),
              f"{(m['accuracy'] - m['baseline']) * 100:+.2f} pts vs always-normal", delta_color="off")
-    b.metric("Precision", f"{m['precision']:.3f}")
-    c.metric("Recall", f"{m['recall']:.3f}")
-    e.metric("F1", f"{m['f1']:.3f}")
+    b.metric("Precision", pct(m["precision"]))
+    b.caption("of all alarms, the share that matched a recorded alert")
+    c.metric("Recall", pct(m["recall"]))
+    c.caption("of all anomaly windows, the share that raised an alarm")
+    e.metric("F1", pct(m["f1"]))
+    e.caption("balance of precision and recall")
+
     f, g, h2 = st.columns(3)
     f.metric("Alert episodes caught", f"{m['caught']} / {m['episodes']}")
+    f.caption(f"{pct(div(m['caught'], m['episodes']), 0)} of recorded alert episodes")
     g.metric("False alarm bursts", m["false_bursts"])
-    h2.metric("Always-normal accuracy", f"{m['baseline']:.2%}")
+    g.caption("runs of alarms with no recorded alert")
+    h2.metric("Always-normal accuracy", pct(m["baseline"], 2))
+    h2.caption("score of a model that never raises an alarm")
+
+    st.subheader("Window counts")
+    q1, q2, q3, q4 = st.columns(4)
+    q1.metric("True positives", f"{m['tp']:,}")
+    q1.caption(f"{pct(m['recall'])} of anomaly windows")
+    q2.metric("False positives", f"{m['fp']:,}")
+    q2.caption(f"{pct(m['fpr'], 2)} of normal windows")
+    q3.metric("False negatives", f"{m['fn']:,}")
+    q3.caption(f"{pct(m['miss'])} of anomaly windows (missed)")
+    q4.metric("True negatives", f"{m['tn']:,}")
+    q4.caption(f"{pct(m['tnr'], 2)} of normal windows")
+    if m["tp"] + m["fp"] > 0:
+        st.write(f"**{pct(1 - m['precision'])}** of all alarm windows are false positives.")
     st.dataframe(pd.DataFrame({"": ["Alarm", "No alarm"],
                                "Recorded alert": [m["tp"], m["fn"]],
                                "No recorded alert": [m["fp"], m["tn"]]}), hide_index=True)
-    st.caption("Accuracy looks high because most windows are normal; predicting 'normal' every time "
-               "already scores the 'always-normal' value. Precision and recall matter more. "
-               "These replay numbers use every 15-minute window, so they differ slightly from the "
-               "official evaluation numbers in the Sensor study tab.")
+
+    with st.expander("What do these percentages mean?"):
+        st.markdown("""
+- **Accuracy** - share of all windows classified correctly (misleading here, most windows are normal).
+- **Precision** - of all alarms, the share that matched a recorded alert.
+- **Recall** - of all anomaly windows, the share that raised an alarm.
+- **False positive rate** - of all normal windows, the share that wrongly raised an alarm.
+- **Miss rate** - of all anomaly windows, the share with no alarm.
+- **Alert episodes caught** - recorded alert episodes with at least one alarm inside.
+- **False alarm burst** - a run of consecutive false-positive windows, counted once.
+""")
+    st.caption("Accuracy looks high because most windows are normal. These replay numbers use every "
+               "15-minute window, so they differ slightly from the official numbers in the Sensor study tab.")
 
 # ---------- tab 3: separate models trained on 1 sensor, or on several sensors ----------
 with tab3:
@@ -167,17 +213,33 @@ with tab3:
     mode = st.radio("Model", ["One sensor", "Several sensors (added best-first)"], horizontal=True)
 
     def show_row(r):
+        has_counts = all(k in r.index and pd.notna(r[k]) for k in ["tp", "fp", "fn", "tn"])
+        ev_a, ev_b = str(r["events"]).split("/")
         k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Accuracy", f"{r['accuracy']:.2%}",
+        k1.metric("Accuracy", pct(r["accuracy"], 2),
                   f"{(r['accuracy'] - r['always_normal_acc']) * 100:+.2f} pts vs always-normal",
                   delta_color="off")
-        k2.metric("Precision", f"{r['precision']:.3f}")
-        k3.metric("Recall", f"{r['recall']:.3f}")
+        k2.metric("Precision", pct(r["precision"]))
+        k3.metric("Recall", pct(r["recall"]))
         k4.metric("Alert episodes caught", r["events"])
-        k5, k6, k7 = st.columns(3)
-        k5.metric("False alarm bursts", int(r["false_bursts"]))
-        k6.metric("ROC-AUC", f"{r['ROC']:.3f}")
-        k7.metric("PR-AUC", f"{r['PR']:.4f}")
+        k4.caption(f"{pct(div(int(ev_a), int(ev_b)), 0)} of recorded alert episodes")
+        j1, j2, j3, j4 = st.columns(4)
+        j1.metric("False alarm bursts", int(r["false_bursts"]))
+        if has_counts:
+            j2.metric("False positives", f"{int(r['fp']):,}")
+            j2.caption(f"{pct(div(r['fp'], r['fp'] + r['tn']), 2)} of normal windows")
+            j3.metric("False negatives", f"{int(r['fn']):,}")
+            j3.caption(f"{pct(div(r['fn'], r['fn'] + r['tp']))} of anomaly windows missed")
+        else:
+            j2.metric("False positives", "n/a")
+            j3.metric("False negatives", "n/a")
+        j4.metric("ROC-AUC / PR-AUC", f"{r['ROC']:.3f} / {r['PR']:.4f}")
+        if has_counts:
+            i1, i2, i3, i4 = st.columns(4)
+            i1.metric("True positives", f"{int(r['tp']):,}")
+            i1.caption(f"{pct(div(r['tp'], r['tp'] + r['fn']))} of anomaly windows")
+            i2.metric("True negatives", f"{int(r['tn']):,}")
+            i2.caption(f"{pct(div(r['tn'], r['tn'] + r['fp']), 2)} of normal windows")
 
     if mode == "One sensor":
         singles = load_csv("single_sensor_by_group.csv")
@@ -188,7 +250,7 @@ with tab3:
             sensor = st.selectbox("Sensor (sorted by PR-AUC)", s["sensor"].tolist())
             show_row(s[s["sensor"] == sensor].iloc[0])
             st.caption("All single-sensor models on this node group:")
-            st.dataframe(s.drop(columns=["group"]), hide_index=True)
+            st.dataframe(pct_table(s.drop(columns=["group"])), hide_index=True)
     else:
         combos = load_csv("final_sensor_study.csv")
         if combos is None:
@@ -199,13 +261,13 @@ with tab3:
             r = cg[cg["n_sensors"] == n].iloc[0]
             st.write(f"Sensors used: **{r['sensors']}**")
             show_row(r)
-            chart_df = cg.assign(n=cg["n_sensors"].astype(str)).set_index("n")
+            chart_df = cg.assign(n=cg["n_sensors"].map(lambda v: f"{v:02d}")).set_index("n")
             col_a, col_b = st.columns(2)
-            col_a.caption("Precision and recall vs number of sensors")
-            col_a.bar_chart(chart_df[["precision", "recall"]])
+            col_a.caption("Precision and recall (%) vs number of sensors")
+            col_a.line_chart(chart_df[["precision", "recall"]] * 100)
             col_b.caption("False alarm bursts vs number of sensors")
             col_b.bar_chart(chart_df[["false_bursts"]])
-            st.dataframe(cg.drop(columns=["group"]), hide_index=True)
+            st.dataframe(pct_table(cg.drop(columns=["group"])), hide_index=True)
 
     st.caption("Small study: about 15 alert episodes per node group and one training run per model, "
                "so small differences between neighbouring rows are within noise. "
